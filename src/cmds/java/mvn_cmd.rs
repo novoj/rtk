@@ -107,6 +107,19 @@ pub fn run_compile(args: &[String], verbose: u8) -> Result<i32> {
     run_mvn_filtered("compile", "mvn_compile", args, verbose, filter_mvn_compile)
 }
 
+/// `test-compile` shares its output shape with `compile`, so we reuse
+/// `filter_mvn_compile`. The goal passed to mvn stays `test-compile` — never
+/// remap to `compile`, that would silently skip test-source compilation.
+pub fn run_test_compile(args: &[String], verbose: u8) -> Result<i32> {
+    run_mvn_filtered(
+        "test-compile",
+        "mvn_test_compile",
+        args,
+        verbose,
+        filter_mvn_compile,
+    )
+}
+
 pub fn run_test(args: &[String], verbose: u8) -> Result<i32> {
     run_mvn_filtered("test", "mvn_test", args, verbose, filter_mvn_test)
 }

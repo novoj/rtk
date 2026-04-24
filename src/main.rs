@@ -1056,6 +1056,13 @@ enum MvnCommands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Compile test sources with compact output (same shape as `compile`)
+    #[command(name = "test-compile")]
+    TestCompile {
+        /// Additional mvn test-compile arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Run tests with compact output (failures only)
     Test {
         /// Additional mvn test arguments
@@ -1121,6 +1128,7 @@ const RTK_META_COMMANDS: &[&str] = &[
 /// Kept in sync with `MvnCommands`.
 const KNOWN_MVN_GOALS: &[&str] = &[
     "compile",
+    "test-compile",
     "test",
     "package",
     "clean",
@@ -1202,6 +1210,7 @@ fn run_fallback(parse_error: clap::Error) -> Result<i32> {
     if let Some((goal, rest)) = try_mvn_reorder(&args) {
         let exit_code = match goal {
             "compile" => mvn_cmd::run_compile(&rest, 0)?,
+            "test-compile" => mvn_cmd::run_test_compile(&rest, 0)?,
             "test" => mvn_cmd::run_test(&rest, 0)?,
             "package" => mvn_cmd::run_package(&rest, 0)?,
             "clean" => mvn_cmd::run_clean(&rest, 0)?,
@@ -2160,6 +2169,7 @@ fn run_cli() -> Result<i32> {
 
         Commands::Mvn { command } => match command {
             MvnCommands::Compile { args } => mvn_cmd::run_compile(&args, cli.verbose)?,
+            MvnCommands::TestCompile { args } => mvn_cmd::run_test_compile(&args, cli.verbose)?,
             MvnCommands::Test { args } => mvn_cmd::run_test(&args, cli.verbose)?,
             MvnCommands::Package { args } => mvn_cmd::run_package(&args, cli.verbose)?,
             MvnCommands::Clean { args } => mvn_cmd::run_clean(&args, cli.verbose)?,
@@ -3007,6 +3017,24 @@ mod tests {
         let (goal, rest) = try_mvn_reorder(&args).expect("should find clean goal");
         assert_eq!(goal, "clean");
         assert_eq!(rest, s(&["-X", "-pl", "mod", "-DskipTests"]));
+    }
+
+    #[test]
+    fn mvn_reorder_test_compile_goal_flag_first() {
+        // The real-world case: `mvn -pl evita_engine test-compile -am`
+        // test-compile must NOT collapse to test or compile — goal string is preserved.
+        let args = s(&["mvn", "-pl", "evita_engine", "test-compile", "-am"]);
+        let (goal, rest) = try_mvn_reorder(&args).expect("should find test-compile");
+        assert_eq!(goal, "test-compile");
+        assert_eq!(rest, s(&["-pl", "evita_engine", "-am"]));
+    }
+
+    #[test]
+    fn mvn_reorder_test_goal_not_shadowed_by_test_compile() {
+        // When `test` appears first, it wins — we don't leapfrog to test-compile.
+        let args = s(&["mvn", "test", "-pl", "mod"]);
+        let (goal, _) = try_mvn_reorder(&args).expect("should find test");
+        assert_eq!(goal, "test");
     }
 
     #[test]
