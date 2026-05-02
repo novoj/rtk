@@ -1,10 +1,11 @@
 #!/usr/bin/env sh
-# rtk installer - https://github.com/rtk-ai/rtk
-# Usage: curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+# rtk installer (FG fork) - https://github.com/novoj/rtk
+# Usage: curl -fsSL https://raw.githubusercontent.com/novoj/rtk/refs/heads/master/install.sh | sh
 
 set -e
 
-REPO="rtk-ai/rtk"
+REPO="novoj/rtk"
+RELEASE_TAG="latest-fg"
 BINARY_NAME="rtk"
 INSTALL_DIR="${RTK_INSTALL_DIR:-$HOME/.local/bin}"
 
@@ -45,11 +46,18 @@ detect_arch() {
     esac
 }
 
-# Get latest release version
-get_latest_version() {
-    VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-    if [ -z "$VERSION" ]; then
-        error "Failed to get latest version"
+# Find the asset URL for the current target in the rolling fork release.
+# The fork ships versioned asset filenames (e.g. rtk-vX.Y.Z-fg.N-<target>.tar.gz)
+# under a stable rolling tag, so we read the URL from the release JSON rather
+# than constructing it.
+get_asset_url() {
+    DOWNLOAD_URL=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/tags/${RELEASE_TAG}" \
+        | grep '"browser_download_url":' \
+        | grep "${TARGET}\.tar\.gz" \
+        | head -1 \
+        | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ -z "$DOWNLOAD_URL" ]; then
+        error "Failed to find asset for target ${TARGET} in release ${RELEASE_TAG}"
     fi
 }
 
@@ -72,9 +80,8 @@ get_target() {
 install() {
     info "Detected: $OS $ARCH"
     info "Target: $TARGET"
-    info "Version: $VERSION"
+    info "Release: $RELEASE_TAG"
 
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${BINARY_NAME}-${TARGET}.tar.gz"
     TEMP_DIR=$(mktemp -d)
     ARCHIVE="${TEMP_DIR}/${BINARY_NAME}.tar.gz"
 
@@ -108,12 +115,12 @@ verify() {
 }
 
 main() {
-    info "Installing $BINARY_NAME..."
+    info "Installing $BINARY_NAME (FG fork)..."
 
     detect_os
     detect_arch
     get_target
-    get_latest_version
+    get_asset_url
     install
     verify
 
