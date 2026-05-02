@@ -1,0 +1,166 @@
+name: Fork Binaries
+
+# Builds Linux x86_64 + aarch64 binaries on every push to master
+# and publishes them as a prerelease tagged vX.Y.Z-fg.<run_number>.
+# Independent of upstream's release-please / Homebrew / Discord plumbing.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - '.github/workflows/fork-binaries.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-binaries-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Compute fork version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive tag from Cargo.toml
+        id: tag
+        run: |
+          BASE=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          TAG="v${BASE}-fg.${{ github.run_number }}"
+          echo "Computed tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            musl: true
+          - target: aarch64-unknown-linux-gnu
+            cross: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install aarch64 cross toolchain
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czvf ../../../rtk-${{ needs.version.outputs.tag }}-${{ matrix.target }}.tar.gz rtk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtk-${{ matrix.target }}
+          path: rtk-${{ needs.version.outputs.tag }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish prerelease
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage release files
+        run: |
+          mkdir -p release
+          find artifacts -type f -name '*.tar.gz' -exec cp {} release/ \;
+          cd release
+          sha256sum * > checksums.txt
+          ls -la
+
+      - name: Create prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.tag }}
+          prerelease: true
+          generate_release_notes: true
+          files: release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  latest:
+    name: Update rolling latest-fg release
+    needs: [version, release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage release files
+        run: |
+          mkdir -p release
+          find artifacts -type f -name '*.tar.gz' -exec cp {} release/ \;
+          cd release
+          sha256sum * > checksums.txt
+
+      - name: Delete previous latest-fg release and tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest-fg --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
+
+      - name: Publish rolling latest-fg release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-fg
+          name: Latest fork build (${{ needs.version.outputs.tag }})
+          body: |
+            Rolling release that always points at the most recent fork build.
+
+            **Source tag:** [`${{ needs.version.outputs.tag }}`](../../releases/tag/${{ needs.version.outputs.tag }})
+            **Commit:** ${{ github.sha }}
+          prerelease: true
+          files: release/*
+          target_commitish: ${{ github.sha }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
